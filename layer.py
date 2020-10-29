@@ -672,13 +672,14 @@ class Layer():
         if config.ndim == 1: config = config[np.newaxis, :] # ensure that the config data is a batch, at leas of just one vector
         n_data = config.shape[0]
 
-        if direction == 'up':
+        if direction == 'up': # Directions of Weights Up->Visible Layer
             N_output_layer = couplings.shape[0]
             if self.nature in ['Potts','Potts_coupled']:
                 if couplings.ndim == 4: # output layer is Potts
-                    n_c_output_layer = couplings.shape[2]
-                    if self.tmp:
+                    n_c_output_layer = couplings.shape[2] # How many Visible States
+                    if self.tmp: # What is self.tmp? some binary variable set to 0 in constructor
                         output = np.zeros([n_data, N_output_layer,n_c_output_layer])
+                        # This branch looks like it's creating some sort of weight graph from the visible layer's output
                         for color in range(self.n_c):
                             A = csr_matrix(config == color)
                             for color_out in range(n_c_output_layer):
@@ -1002,6 +1003,8 @@ class Layer():
 
         elif self.nature == 'dReLU':
             if value == 'data':
+                # np.maximum(arr, 0) keeps only the positive values
+                # min keeps the negative values
                 mu2_p_pos = average(np.maximum(data_pos,0)**2,weights=weights)
                 mu2_n_pos = average(np.minimum(data_pos,0)**2,weights=weights)
                 mu2_p_neg = average(np.maximum(data_neg,0)**2,weights=weights_neg)
@@ -1163,6 +1166,7 @@ class Layer():
         if (self.position== 'hidden'):
             if self.nature in ['Bernoulli','Spin','Bernoulli_coupled','Spin_coupled']:
                 mu_neg0 = self.mean_from_inputs( np.zeros([1,self.N]),beta=0)[0]
+                # With beta as 0, psi =0, params -> 0 equivalents, theta0s -> 0, a0s -> one, I think it pretty much all goes to 0
                 gradients['fields0'] = mu_pos - mu_neg0
                 if weights is not None:
                     gradients['fields0'] *= weights.sum()/data_pos.shape[0]

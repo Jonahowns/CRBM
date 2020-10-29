@@ -25,7 +25,7 @@ import itertools
 
 def check_random_state(seed):
     if seed==None or seed==np.random:
-        return np.random.mtrand._rand
+        return np.random.mtrand._rand # Mersenne Twister Random Number Generator, Can sample from many different probability distributions
     if isinstance(seed, (numbers.Integral, np.integer)):
         return np.random.RandomState(seed)
     if isinstance(seed, np.random.RandomState):
@@ -174,9 +174,10 @@ def saturate(x,xmax):
 #        return out
 
 def average(X,c=1,weights=None):
+    # c is the number of states visible nodes can take on
     if (c==1):
         if weights is None:
-            return X.mean(0)
+            return X.mean(0) # Mean of array along axis 0
         else:
             if X.ndim ==1:
                 return (X * weights).sum(0)/weights.sum()
@@ -189,6 +190,7 @@ def average(X,c=1,weights=None):
             if X.ndim == 1:
                 X = X[np.newaxis,:]
                 return cy_utilities.average_C(X,c)[0]
+            # data is two dims I think
             elif X.ndim == 2:
                 return cy_utilities.average_C(X,c)
             elif X.ndim == 3:

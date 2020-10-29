@@ -42,8 +42,9 @@ import time
 #from scipy import weave
 #import os
 
-
+# For initilizing these gradients, X1_p, X1_n = hidden, X2_p, X2_n = Visible, n_c1 -> n_ch, n_c2 -> n_cv
 def couplings_gradients(W,X1_p,X1_n, X2_p,X2_n, n_c1, n_c2,mean1= False, mean2= False, l1 = 0, l1b = 0, l1c= 0, l2 = 0,l1_custom = None,l1b_custom=None,weights=None,weights_neg=None):
+    # Average Product for Positives
     update =utilities.average_product(X1_p, X2_p, c1 = n_c1,c2=n_c2, mean1 = mean1, mean2= mean2,weights=weights) - utilities.average_product(X1_n, X2_n, c1 = n_c1,c2=n_c2, mean1 = mean1, mean2= mean2,weights=weights_neg)
     if l2>0:
         update -= l2 * W
@@ -74,7 +75,7 @@ def gauge_adjust_couplings(W,n_c1,n_c2,gauge='zerosum'):
         if (n_c1 >1) & (n_c2 >1):
             W =W
         elif (n_c1 ==1) & (n_c2 >1):
-            W-= W.sum(-1)[:,:,np.newaxis]/n_c2
+            W-= W.sum(-1)[:,:,np.newaxis]/n_c2 # constrains visible potts states to summing to 0 for each hjvi
         elif (n_c1 >1) & (n_c2 ==1):
             W-= W.sum(-1)[:,:,np.newaxis]/n_c1
     elif gauge=='none':

@@ -33,6 +33,7 @@ import batch_norm_utils
 #%%
 
 class RBM(pgm.PGM):
+                        #number vis   #number hidden #
     def __init__(self,n_v = 100, n_h = 20,visible = 'Bernoulli', hidden='Bernoulli', n_cv =1, n_ch =1, random_state = None, gauge='zerosum',zero_field = False):
         self.n_v = n_v
         self.n_h = n_h
@@ -50,14 +51,23 @@ class RBM(pgm.PGM):
         else:
             self.n_ch = 1
 
+        # Initializer of the PGM to it's common RBM form, 1 visible 1 hidden
         super(RBM, self).__init__(n_layers = 2, layers_size = [self.n_v,self.n_h],layers_nature = [visible,hidden], layers_n_c = [self.n_cv,self.n_ch] , layers_name = ['vlayer','hlayer'] )
 
 
-        self.gauge = gauge
-        self.zero_field = zero_field
+        self.gauge = gauge # usually just zero sum
+        self.zero_field = zero_field # NOT Quite sure what this is
+        # Initializing Visible Layer using layer.py
         self.vlayer = layer.Layer(N= self.n_v, nature = self.visible, position = 'visible', n_c = self.n_cv, random_state = self.random_state, zero_field = self.zero_field)
         self.hlayer = layer.Layer(N= self.n_h, nature = self.hidden, position = 'hidden', n_c = self.n_ch, random_state = self.random_state, zero_field = self.zero_field)
+        # In Layer class:
+        #   Potential Specific Parameters (DReLU and Potts)
+
+
+
         self.init_weights(0.01)
+        # For potts visible and DReLU hidden n_cv -> q, n_ch == 1
+
         self.tmp_l2_fields = 0
 
 
@@ -71,8 +81,12 @@ class RBM(pgm.PGM):
         elif (self.n_ch >1) & (self.n_cv ==1):
             self.weights = amplitude * self.random_state.randn(self.n_h, self.n_v,self.n_ch)
             self.weights = pgm.gauge_adjust_couplings(self.weights,self.n_ch,self.n_cv,gauge=self.gauge)
+
+        ## This statement is what the RBM we want does
         elif (self.n_ch ==1) & (self.n_cv>1):
-            self.weights = amplitude * self.random_state.randn(self.n_h, self.n_v,self.n_cv)
+            # Weights are normally distributed in 3d matrix dimensions nh, nv, and ncv and scaled by amplitude
+            self.weights = amplitude * self.random_state.randn(self.n_h, self.n_v,self.n_cv) #Random initialization of weights with 3d array: Number of hidden x Number of Visible x Number of Potts states
+            #  constrains visible potts states to sum to 0 for each weight set connecting vi to hj
             self.weights = pgm.gauge_adjust_couplings(self.weights,self.n_ch,self.n_cv,gauge=self.gauge)
         else:
             self.weights = amplitude * self.random_state.randn(self.n_h, self.n_v)
@@ -265,6 +279,15 @@ class RBM(pgm.PGM):
             lr_decay = True,lr_final=None,decay_after = 0.5,l1 = 0, l1b = 0, l1c=0, l2 = 0,l2_fields =0,no_fields = False,weights = None,
             update_betas =None, record_acceptance = None, shuffle_data = True,epsilon=  1e-6, verbose = 1, record = [],record_interval = 100,data_test = None,weights_test=None,l1_custom=None,l1b_custom=None,M_AIS=10,n_betas_AIS=10000):
 
+        # data is the sequences ex. "ACGT" [1, 2, 3, 4]
+        #N_PT has to do with parallel tempering steps
+        # N_MC is the number of MC samples performed to calc second term of loss function
+        # n_chains?
+        # CD -> Contrastive Divergence
+        # optimizer -> SGD stochastic gradient descent, or ADAM momenta optimizer
+        # weights -> Individual weighting of sequences
+
+        # data is two dims I think
         self.batch_size = batch_size
         self.optimizer  = optimizer
         if self.hidden in ['Gaussian','ReLU','ReLU+']:
@@ -273,6 +296,9 @@ class RBM(pgm.PGM):
         else:
             if batch_norm is None:
                 batch_norm = True
+
+        # Batch Norm is typically true
+
         self.batch_norm = batch_norm
         self.record_swaps = False
 
@@ -292,9 +318,12 @@ class RBM(pgm.PGM):
             if self.optimizer == 'ADAM':
                 learning_rate *= 0.1
 
+
+        # lr is 0.1 unless not batch norm, if ADAM divide by 10
+
         self.learning_rate_init = copy.copy(learning_rate)
         self.learning_rate = learning_rate
-        self.lr_decay = lr_decay
+        self.lr_decay = lr_decay # Learning Rate Decay
         if self.lr_decay:
             self.decay_after = decay_after
             self.start_decay = self.n_iter*self.decay_after
@@ -305,9 +334,23 @@ class RBM(pgm.PGM):
             self.decay_gamma = (float(self.lr_final)/float(self.learning_rate))**(1/float(self.n_iter* (1-self.decay_after) ))
 
         self.no_fields = no_fields
+
+        # Dictionary of  'v layer, h layer and weights'
+        # v layer - > vlayer of potts has ['fields'] set to mu_pos - mu_neg
+        # Hlayer as DReLU, computes average of the DReLU parameters, these go to 0, gradients[ a_plus, a_minus, theta_plus, theta_minus] are calc from mus and mu2s
+        # gradients['a', 'b', 'theta', 'eta'] are set calculated from the prior ones
+        # If hidden, mu_neg0 is set by mean from inputs, pretty sure this is all 0's pretty much
+        # 'W' has the couplings_gradients calculated with some sort of average product of the Positive and Negative activations of both V and H
         self.gradient = self.initialize_gradient_dictionary()
+
+
+        # do_grad_updates dictionary item with keys['vlayer', 'hlayer'], and ['W'] = True
+        # if vlayer Potts, [valyer][fields] = True
+        # if hlayer DReLU [b, theta, eta, theta plus0, thetaminus0, aplus 0, aminus0] set to True
+        #                   ['a', thetaplus, thetaminus, aplus, aminus, a0, b0, theta0, eta0] set to False
         self.do_grad_updates = self.initialize_do_grad_updates()
 
+        # SGD is the base optimizer
         if self.optimizer =='momentum':
             if extra_params is None:
                 extra_params = 0.9
@@ -327,27 +370,33 @@ class RBM(pgm.PGM):
             self.gradient_moment2 = self.initialize_gradient_dictionary()
 
 
-
+        #Convert data to correct type
         data = np.asarray(data,dtype=self.vlayer.type,order="c")
+
         if self.batch_norm:
+            # Matrix of normalized state (A,c,G,T) Counts
             self.mu_data = utilities.average(data,c=self.n_cv,weights=weights)
 
 #        if self.visible == 'Bernoulli':
 #            data = np.asarray(data,dtype=float)
 
+
+        # Just separating data into slices for batch learning
         n_samples = data.shape[0]
         n_batches = int(np.ceil(float(n_samples) / self.batch_size))
         batch_slices = list(gen_even_slices(n_batches * self.batch_size,
                                             n_batches, n_samples))
 
 
-        if init <> 'previous':
+        if init <> 'previous': # If not previous
+            # We care about DReLU for right now
             if self.hidden in ['Bernoulli','Spin','Potts']:
                 norm_init = 0.01
             else:
+                # Interesting Value for norm_init
                 norm_init = np.sqrt(0.1/self.n_v)
 
-            self.init_weights(norm_init)
+            self.init_weights(norm_init) # Sets up weights scaled by norm_int amplitude and constrain sum of potts probs to 0 (if zerosum gauge)
             if init=='independent':
                 self.vlayer.init_params_from_data(data,eps=epsilon,weights=weights)
 
@@ -355,7 +404,8 @@ class RBM(pgm.PGM):
 
         self.N_PT = N_PT
         self.N_MC = N_MC
-        if N_MC == 0:
+
+        if N_MC == 0: # Not Sure what this is for/doing
             if self.n_cv > 1:
                 nchains = (self.n_cv)**self.n_v
             else:
@@ -366,6 +416,7 @@ class RBM(pgm.PGM):
         else:
             self.nchains = nchains
 
+        # Take in more learning parameters
         self.CD = CD
         self.l1= l1
         self.l1b = l1b
@@ -376,7 +427,7 @@ class RBM(pgm.PGM):
         self.tmp_l2_fields = l2_fields
 
 
-
+        # Parallel Tempering Stuff
         if self.N_PT>1:
             if record_acceptance==None:
                 record_acceptance = True
@@ -413,6 +464,7 @@ class RBM(pgm.PGM):
 
 
         if self.N_PT > 1:
+            # Returns Multiple Random configurations
             self.fantasy_v = self.vlayer.random_init_config(self.nchains*self.N_PT).reshape([self.N_PT,self.nchains,self.vlayer.N])
             self.fantasy_h = self.hlayer.random_init_config(self.nchains*self.N_PT).reshape([self.N_PT,self.nchains,self.hlayer.N])
             self.fantasy_E = np.zeros([self.N_PT,self.nchains])
@@ -420,11 +472,14 @@ class RBM(pgm.PGM):
             if self.N_MC == 0:
                 self.fantasy_v = utilities.make_all_discrete_configs(self.n_v,self.visible,c=self.n_cv)
             else:
+                # MC Sampling
+                # if Potts -> sample_from_inputs
                 self.fantasy_v = self.vlayer.random_init_config(self.nchains)
+                # if dReLU -> Normal Distribution Samples
                 self.fantasy_h = self.hlayer.random_init_config(self.nchains)
 
 
-
+        # Self Explanatory
         if shuffle_data:
             permute = np.arange(data.shape[0])
             self.random_state.shuffle(permute)
@@ -445,7 +500,7 @@ class RBM(pgm.PGM):
                 lik = self.pseudo_likelihood(data).mean()
             print 'Iteration number 0, pseudo-likelihood: %.2f'%lik
 
-
+        # Record can have these strings to initialize the storage of these parameters
         result = {}
         if 'W' in record:
             result['W'] = []
@@ -494,16 +549,20 @@ class RBM(pgm.PGM):
 
         count = 0
 
+
+        # The Actual Training Starts HERE
         for epoch in xrange(1,n_iter+1):
             if verbose:
-                begin = time.time()
+                begin = time.time() # time
             if self.lr_decay:
                 if (epoch>self.start_decay):
-                    self.learning_rate*= self.decay_gamma
+                    self.learning_rate*= self.decay_gamma # Adjust Learning Rate from parameters above
 
             print 'Starting epoch %s'%(epoch)
+            # For each batch
             for batch_slice in batch_slices:
                 if weights is None:
+                    # minibatch_fit is the main workhorse
                     self.minibatch_fit(data[batch_slice],weights=None)
                 else:
                     self.minibatch_fit(data[batch_slice],weights=weights[batch_slice])
@@ -519,6 +578,7 @@ class RBM(pgm.PGM):
                     joint_z = 0.1 * utilities.average_product(previous,current,c1=self.zlayer.n_c,c2=self.zlayer.n_c)[0,0] + 0.9 * joint_z
                     previous = current.copy()
 
+                # Records all the funstuff
                 if (count%record_interval ==0):
                     if 'W' in record:
                         result['W'].append( self.weights.copy() )
@@ -608,11 +668,14 @@ class RBM(pgm.PGM):
 
 
     def minibatch_fit(self,V_pos,weights = None):
+        # V_pos is the data in the visible units
+
         self.count_updates +=1
         if self.CD: # Contrastive divergence: initialize the Markov chain at the data point.
             self.fantasy_v = V_pos
         # Else: use previous value.
         for _ in range(self.N_MC):
+            # Parallel Tempering Fanciness
             if self.N_PT>1:
                 (self.fantasy_v,self.fantasy_h),self.fantasy_E = self.markov_step_PT2((self.fantasy_v,self.fantasy_h),self.fantasy_E)
                 (self.fantasy_v,self.fantasy_h),self.fantasy_E = self.exchange_step_PT((self.fantasy_v,self.fantasy_h),self.fantasy_E,record_acceptance=self.record_acceptance,compute_energy=False)
@@ -620,7 +683,9 @@ class RBM(pgm.PGM):
                     self.update_betas()
 
             else:
-                (self.fantasy_v,self.fantasy_h) = self.markov_step((self.fantasy_v,self.fantasy_h) )
+                # Sample from
+                (self.fantasy_v,self.fantasy_h) = self.markov_step((self.fantasy_v,self.fantasy_h) ) # Markov Step
+
 
         if self.N_PT>1:
             V_neg = self.fantasy_v[0,:,:]
@@ -823,8 +888,15 @@ class RBM(pgm.PGM):
 
     def initialize_gradient_dictionary(self):
         out = {}
+        # vlayer as potts sets mu pos and mu neg to 0 with, gradients['fields'] set to mupos - mu neg, out['vlayer'] = gradients
         out['vlayer'] = self.vlayer.internal_gradients(np.zeros([1,self.n_v],dtype=self.vlayer.type), np.zeros([1,self.n_v],dtype=self.vlayer.type) )
+        # Hlayer as DReLU, computes average of the DReLU parameters, these go to 0, gradients[ a_plus, a_minus, theta_plus, theta_minus] are calc from mus and mu2s
+        # gradients['a', 'b', 'theta', 'eta'] are set calculated from the prior ones
+        # If hidden, mu_neg0 is set by mean from inputs, pretty sure this is all 0's pretty much
         out['hlayer'] = self.hlayer.internal_gradients(np.zeros([1,self.n_h],dtype=self.hlayer.type), np.zeros([1,self.n_h],dtype=self.hlayer.type) )
+
+        # This is more interesting
+        ## Calculates some sort of average product
         out['W'] = pgm.couplings_gradients(self.weights,np.zeros([1,self.n_h],dtype=self.hlayer.type),np.zeros([1,self.n_h],dtype=self.hlayer.type),np.zeros([1,self.n_v],dtype=self.vlayer.type),np.zeros([1,self.n_v],dtype=self.vlayer.type), self.n_ch, self.n_cv )
         return out
 
