@@ -358,6 +358,7 @@ class Layer():
              print 'not supported'
 
     def mean12_pm_from_inputs(self,psi, beta = 1):
+        #Output arrays are all the same size as psi
         if self.nature =='dReLU':
             if beta == 1:
                 theta_plus = self.theta_plus[np.newaxis,:]
@@ -373,16 +374,16 @@ class Layer():
 
             psi_plus = (-psi + theta_plus)/np.sqrt(a_plus)
             psi_minus = (psi + theta_minus)/np.sqrt(a_minus)
-            etg_plus = erf_times_gauss(psi_plus)
-            etg_minus = erf_times_gauss(psi_minus)
-            p_plus = 1/(1+ (etg_minus/np.sqrt(a_minus))/(etg_plus/np.sqrt(a_plus)) )
+            etg_plus = erf_times_gauss(psi_plus) #Z+
+            etg_minus = erf_times_gauss(psi_minus) #Z-
+            p_plus = 1/(1+ (etg_minus/np.sqrt(a_minus))/(etg_plus/np.sqrt(a_plus)) ) #p+
 
             nans  = np.isnan(p_plus)
             p_plus[nans] = 1.0 * (np.abs(psi_plus[nans]) > np.abs(psi_minus[nans]) )
 
             p_minus = 1- p_plus
-            mean2_pos = 1/a_plus * (1 +     psi_plus**2  -  psi_plus/etg_plus )
-            mean2_neg = 1/a_minus * (1 +     psi_minus**2  -  psi_minus/etg_minus )
+            mean2_pos = 1/a_plus * (1 +     psi_plus**2  -  psi_plus/etg_plus ) #pg. 50 -<max(h,0)|I>
+            mean2_neg = 1/a_minus * (1 +     psi_minus**2  -  psi_minus/etg_minus )# -<min(h,0)|I>
             mean_pos = (-psi_plus + 1/etg_plus) / np.sqrt(a_plus)
             mean_neg = (psi_minus - 1/etg_minus) / np.sqrt(a_minus)
             return (p_plus* mean_pos, p_minus * mean_neg, p_plus * mean2_pos, p_minus * mean2_neg)
@@ -479,6 +480,10 @@ class Layer():
 
 
     def sample_from_inputs(self,psi,beta=1,previous=(None,None)):
+
+        # Psi is the Input! For Hidden Iu is in psi
+        # For Visible its Ii
+
         if self.nature == 'Bernoulli':
             return (self.random_state.random_sample(size = psi.shape) < self.mean_from_inputs(psi,beta))
         elif self.nature == 'Spin':
@@ -573,27 +578,35 @@ class Layer():
                 print 'a',self.a[nan_unit]
                 print 'b',self.b[nan_unit]
 
+            # -I + theta +/ sqrt(gamma plus)
             psi_plus = (-psi + theta_plus)/np.sqrt(a_plus)
             psi_minus = (psi + theta_minus)/np.sqrt(a_minus)
 
+            # etg = phi(psi_plus), Almost Z -+
             etg_plus = erf_times_gauss(psi_plus)
             etg_minus = erf_times_gauss(psi_minus)
 
+            # p+ and p-
             p_plus = 1/(1+ (etg_minus/np.sqrt(a_minus))/(etg_plus/np.sqrt(a_plus)) )
             nans  = np.isnan(p_plus)
             p_plus[nans] = 1.0 * (np.abs(psi_plus[nans]) > np.abs(psi_minus[nans]) )
             p_minus = 1- p_plus
 
+            # Random Samples from 0 to 1 returned in array ssme shape as p_plus and p_minus
             is_pos = self.random_state.random_sample(size=psi.shape) < p_plus
+            # Positive sampled as any drawings less than p_plus
+            # Samples > p_plus set to negative
             rmax = np.zeros(p_plus.shape)
             rmin = np.zeros(p_plus.shape)
-            rmin[is_pos] = erf( psi_plus[is_pos]/np.sqrt(2) )
-            rmax[is_pos] = 1
-            rmin[~is_pos] = -1
-            rmax[~is_pos] = erf( -psi_minus[~is_pos]/np.sqrt(2) )
+            rmin[is_pos] = erf( psi_plus[is_pos]/np.sqrt(2) ) # Part of Phi(x)
+            rmax[is_pos] = 1 # pos values rmax set to one
+            rmin[~is_pos] = -1 # neg samples rmin set to -1
+            rmax[~is_pos] = erf( -psi_minus[~is_pos]/np.sqrt(2) ) #Part of Phi(x)
+            # Pos vals stored as erf(x/sqrt(2)) where x is psi_plus and
 
             h = np.zeros(psi.shape)
             tmp = (rmax - rmin > 1e-14)
+            # Not 100% sure what this is accomplishing
             h = np.sqrt(2) * erfinv(rmin + (rmax - rmin) * self.random_state.random_sample(size = h.shape)   )
             h[is_pos] -= psi_plus[is_pos]
             h[~is_pos] += psi_minus[~is_pos]
@@ -668,6 +681,7 @@ class Layer():
 
 
     def compute_output(self,config, couplings, direction='up'):
+        # Computing Iu and Ii from pg. 36 Tubiana
 
         if config.ndim == 1: config = config[np.newaxis, :] # ensure that the config data is a batch, at leas of just one vector
         n_data = config.shape[0]
@@ -686,6 +700,7 @@ class Layer():
                                 output[:,:,color_out]+= A.dot(couplings[:,:,color_out,color].T)
                         return output
                     else:
+
                         return cy_utilities.compute_output_Potts_C(self.N, self.n_c,n_c_output_layer ,config,couplings)
                 else:
                     if self.tmp:
@@ -722,6 +737,7 @@ class Layer():
                     else:
                         return cy_utilities.compute_output_C2(self.N, self.n_c,config,couplings)
 
+            #dReLU in hiddent, Compute Output goes here
             else:
                 return np.tensordot(config, couplings, axes = (1,0))
 
@@ -1016,7 +1032,7 @@ class Layer():
             elif value == 'mean':
                 print 'dReLU mean not supported for internal gradient'
             elif value == 'input':
-                mu_p_pos,mu_n_pos,mu2_p_pos,mu2_n_pos = self.mean12_pm_from_inputs(data_pos)
+                mu_p_pos,mu_n_pos,mu2_p_pos,mu2_n_pos = self.mean12_pm_from_inputs(data_pos) #array of deriv. for theta + and - and gamma + and -
                 mu_p_pos = average(mu_p_pos,weights = weights)
                 mu_n_pos = average(mu_n_pos,weights = weights)
                 mu2_p_pos = average(mu2_p_pos,weights=weights)
@@ -1047,10 +1063,10 @@ class Layer():
 
 
 
-            gradients['a_plus'] = - 0.5 * (mu2_p_pos - mu2_p_neg)
-            gradients['a_minus'] = -0.5 * (mu2_n_pos - mu2_n_neg)
-            gradients['theta_plus'] = - mu_p_pos + mu_p_neg
-            gradients['theta_minus'] = mu_n_pos - mu_n_neg
+            gradients['a_plus'] = - 0.5 * (mu2_p_pos - mu2_p_neg) #gamma+
+            gradients['a_minus'] = -0.5 * (mu2_n_pos - mu2_n_neg) #gamma-
+            gradients['theta_plus'] = - mu_p_pos + mu_p_neg #theta+
+            gradients['theta_minus'] = mu_n_pos - mu_n_neg #theta-
 
 
             if weights is not None:

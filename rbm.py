@@ -153,7 +153,17 @@ class RBM(pgm.PGM):
 
 
     def markov_step(self,(v,h),beta =1):
+        # For CD Learning -> v is the data in the visible units
+        # minibatch (fantasy_v, fantasy_h) -> fantasy_v initialized at data point, fantasy h is arbitrary and replaced by the below sampling
+
+        # Sample Hidden Layer Given the Visible Units
+        # What does this do? self.vlayer.compute_output(v,self.weights, direction ='up') pg. 36 Tubiana Thesis I think it computes a layer Iu = Sumi Wiu(vi)
+        # Direction basically controls whether W or W.T is used
+
+        # self.hlayer.sample_from_inputs pg. 36 Sampling!
+
          h = self.hlayer.sample_from_inputs( self.vlayer.compute_output(v,self.weights, direction ='up') , beta = beta )
+        # Sample the Visible Units Given the Hidden Units
          v = self.vlayer.sample_from_inputs( self.hlayer.compute_output(h,self.weights,direction='down') , beta = beta )
          return (v,h)
 
@@ -683,29 +693,32 @@ class RBM(pgm.PGM):
                     self.update_betas()
 
             else:
-                # Sample from
+                # MC Sampling
                 (self.fantasy_v,self.fantasy_h) = self.markov_step((self.fantasy_v,self.fantasy_h) ) # Markov Step
 
 
         if self.N_PT>1:
             V_neg = self.fantasy_v[0,:,:]
         else:
-            V_neg = self.fantasy_v
+            V_neg = self.fantasy_v # Visible units after monte carlo sampling
+
 
         if self.N_MC>0: # No Monte Carlo. Compute exhaustively the moments using all 2**N configurations.
             weights_neg = None
-        else:
+        else: #
             F = self.free_energy(V_neg)
             F -= F.min()
             weights_neg = np.exp(-F)
             weights_neg /= weights_neg.sum()
 
 
-        psi_pos = self.vlayer.compute_output(V_pos,self.weights)
-        psi_neg = self.vlayer.compute_output(V_neg,self.weights)
+        psi_pos = self.vlayer.compute_output(V_pos,self.weights) # Iu for data points
+        psi_neg = self.vlayer.compute_output(V_neg,self.weights) # Iu for MC sampled visible units
 
         if self.batch_norm:
+            # n_cv >1 potts visible, n_ch ==1 for DReLU
             if (self.n_cv >1) & (self.n_ch  == 1):
+                # mu_data is the normalized state counts for data in the batch
                 mu_psi = np.tensordot(self.weights,self.mu_data,axes = [(1,2),(0,1)])
             elif (self.n_cv >1) & (self.n_ch  > 1):
                 mu_psi = np.tensordot(self.weights,self.mu_data,axes = [(1,3),(0,1)])
@@ -713,6 +726,7 @@ class RBM(pgm.PGM):
                 mu_psi = np.tensordot(self.weights,self.mu_data,axes = [1,0])
             else:
                 mu_psi = np.dot(self.weights,self.mu_data)
+
             delta_mu_psi = (mu_psi-self.hlayer.mu_psi)
             self.hlayer.mu_psi += delta_mu_psi
             if self.hidden in ['Bernoulli','Spin','Potts']:
@@ -732,11 +746,12 @@ class RBM(pgm.PGM):
                     var_e = utilities.average(psi_pos**2,weights=weights) - utilities.average(psi_pos,weights=weights)**2
                     mean_v = np.zeros(self.n_h)
                 elif self.hidden in ['ReLU','dReLU','ReLU+']:
-                    e = self.hlayer.mean_from_inputs(psi_pos) * self.hlayer.a[np.newaxis,:]
-                    v = (self.hlayer.var_from_inputs(psi_pos) * self.hlayer.a[np.newaxis,:]-1)
-                    var_e = utilities.average(e**2,weights=weights) - utilities.average(e,weights=weights)**2
-                    mean_v = utilities.average(v,weights=weights)
+                    e = self.hlayer.mean_from_inputs(psi_pos) * self.hlayer.a[np.newaxis,:] # mean
+                    v = (self.hlayer.var_from_inputs(psi_pos) * self.hlayer.a[np.newaxis,:]-1) # var
+                    var_e = utilities.average(e**2,weights=weights) - utilities.average(e,weights=weights)**2 #var of mean
+                    mean_v = utilities.average(v,weights=weights) # mean of var
 
+                # Some other batch norm stuff. Not sure exactly what is being done
                 new_a = (1+mean_v+np.sqrt( (1+mean_v)**2+4*var_e))/2
                 delta_a = self.learning_rate/self.learning_rate_init * (new_a  - self.hlayer.a )
                 constraint = np.maximum(-self.hlayer.a/4,0.05-self.hlayer.a) # a cannot go below 0.05; a_new >= 0.75 * a.
@@ -754,11 +769,14 @@ class RBM(pgm.PGM):
                     self.hlayer.a_minus = self.hlayer.a/(1-self.hlayer.eta)
 
 
-        H = self.hlayer.mean_from_inputs(psi_pos)
-        H_neg = self.hlayer.mean_from_inputs(psi_neg)
+        H = self.hlayer.mean_from_inputs(psi_pos) # H(Iu Data)
+        H_neg = self.hlayer.mean_from_inputs(psi_neg) #H(Iu MC)
 
+        # Uses Softmax to
         self.gradient['vlayer'] = self.vlayer.internal_gradients(V_pos,V_neg,weights=weights,weights_neg=weights_neg,value='data')
+        # Takes inputs calculates gradients on a+,a-, a, theta+,theta-,theta, b? (theta+ - theta-), eta
         self.gradient['hlayer'] = self.hlayer.internal_gradients(psi_pos,psi_neg,weights=weights,weights_neg=weights_neg,value='input')
+        # mean of
         self.gradient['W'] = pgm.couplings_gradients(self.weights,H,H_neg,V_pos,V_neg,self.n_ch, self.n_cv, mean1 = True, l1 = self.l1, l1b = self.l1b, l1c = self.l1c, l2 = self.l2,weights=weights,weights_neg=weights_neg,l1_custom=self.l1_custom,l1b_custom=self.l1b_custom)
 
         if self.batch_norm: # Modify gradients.
@@ -793,6 +811,7 @@ class RBM(pgm.PGM):
                     self.gradient['hlayer']['b'] += self.gradient['hlayer']['a'] * da_db
                     self.gradient['hlayer']['b'] = saturate(self.gradient['hlayer']['b'],1.0/self.learning_rate)
 
+                #ding ding ding need to figure out what this is doing
                 elif self.hidden == 'dReLU':
                     db_dw,da_db, da_dtheta, da_deta, da_dw = batch_norm_utils.get_cross_derivatives_dReLU(V_pos,psi_pos, self.hlayer, self.n_cv,weights=weights)
                     da_db *=  self.learning_rate/self.learning_rate_init * correction
@@ -819,15 +838,17 @@ class RBM(pgm.PGM):
                 else:
                     self.gradient['W'] += db_dw[np.newaxis,:] * self.gradient['hlayer']['b'][:,np.newaxis] + da_dw * self.gradient['hlayer']['a'][:,np.newaxis]
 
+        # Saturate replaces values of >1 with 1
         self.gradient['W'] = saturate(self.gradient['W'],1.0)
-        if self.tmp_l2_fields>0:
+        # Donde?
+        if self.tmp_l2_fields>0: #Not 100% sure what this is
             self.gradient['vlayer']['fields'] -= self.tmp_l2_fields *  self.vlayer.fields
-        for layer_ in ['vlayer','hlayer']:
-            for internal_param,gradient in self.gradient[layer_].items():
+        for layer_ in ['vlayer','hlayer']: # for each layer
+            for internal_param,gradient in self.gradient[layer_].items(): # for gradient term in layer
                 if self.do_grad_updates[layer_][internal_param]:
                     current = getattr(getattr(self,layer_),internal_param)
                     if self.optimizer == 'SGD':
-                        new = current + self.learning_rate * gradient
+                        new = current + self.learning_rate * gradient # Update param using new,
                     elif self.optimizer == 'momentum':
                         self.previous_update[layer_][internal_param] =  (1- self.momentum) * self.learning_rate * gradient + self.momentum * self.previous_update[layer_][internal_param]
                         new = current + self.previous_update[layer_][internal_param]
@@ -837,14 +858,16 @@ class RBM(pgm.PGM):
 
                         new = current + self.learning_rate * (self.gradient_moment1[layer_][internal_param]/(1-self.beta1**self.count_updates)) /(self.epsilon + np.sqrt( self.gradient_moment2[layer_][internal_param]/(1-self.beta2**self.count_updates ) ) )
 
+                    # Set the parameter in the layer itself to its updated value new
                     setattr( getattr(self,layer_),internal_param, new )
 
         if self.do_grad_updates['W']:
             if self.optimizer == 'SGD':
+                #n_ch =1 for DReLU
                 if (self.n_cv>1) | (self.n_ch >1):
                     self.weights += self.learning_rate * pgm.gauge_adjust_couplings(self.gradient['W'],self.n_ch,self.n_cv,gauge=self.gauge)
                 else:
-                    self.weights += self.learning_rate * self.gradient['W']
+                    self.weights += self.learning_rate * self.gradient['W'] # Update of the Weights
 
             elif self.optimizer == 'momentum':
                 self.previous_update['W'] = (1-self.momentum) * self.learning_rate * self.gradient['W'] + self.momentum * self.previous_update['W']
@@ -872,6 +895,7 @@ class RBM(pgm.PGM):
             self.hlayer.theta_minus = self.hlayer.theta - self.hlayer.b
 
         elif self.hidden =='dReLU':
+            #Not sure what these updates correspond too exactly
             self.hlayer.eta =  np.sign(self.hlayer.eta) * np.minimum(np.abs(self.hlayer.eta),0.95)
             self.hlayer.a_plus = self.hlayer.a/(1+self.hlayer.eta)
             self.hlayer.a_minus = self.hlayer.a/(1-self.hlayer.eta)

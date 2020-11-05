@@ -100,7 +100,7 @@ def logsumexp(a, axis=None, b=None, keepdims=False): ## from scipy
 
     return out
 
-def erf_times_gauss(X):
+def erf_times_gauss(X): # This is the "characteristic" function phi pg.
     m = np.zeros(X.shape)
     tmp = X< 6
     m[tmp] = np.exp(0.5 * X[tmp]**2) * (1- erf(X[tmp]/np.sqrt(2))) * np.sqrt(np.pi/2);
@@ -145,6 +145,7 @@ def invert_softmax(mu, eps=1e-6, gauge = 'zerosum'):
 
 
 def cumulative_probabilities(X,maxi=1e9):
+    # Looks like a version of a softmax
     X -= X.max(-1)[:,:,np.newaxis]
     out = np.exp(X)
     # out[out>maxi] = maxi # For numerical stability.
